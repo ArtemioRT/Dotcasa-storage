@@ -142,7 +142,7 @@ router.post('/storage/delete', async (req, res) => {
 // ============================================================================
 // POST /storage/upload — Versión Oficial Estricta Alineada con Uppy (bundle: true)
 // ============================================================================
-router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => {
+router.post('/storage/upload', upload.array('files[]'), async (req, res) => {
   const t0 = Date.now();
 
   console.log('\n' + '='.repeat(70));
