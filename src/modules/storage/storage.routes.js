@@ -153,7 +153,8 @@ router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => 
     if (!req.files || req.files.length === 0) {
       console.error('❌ [BACKEND ERROR] No se encontraron archivos en el campo mandatorio "files[]".');
       return res.status(400).json({
-        urls: '',
+        url: '',
+        urls: [],                      // ← CAMBIO 1: array vacío, no string
         error: 'El servidor no recibió archivos bajo la estructura esperada ("files[]").'
       });
     }
@@ -198,17 +199,18 @@ router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => 
 
     console.log(`🏁 [BACKEND] Subida masiva finalizada con éxito en ${dur}s`);
 
-    // 3. Retornar el JSON estructurado que mantiene estables a los componentes XHR
+    // 3. Retornar el JSON que Uppy (bundle: true) espera: una URL por archivo
     res.status(200);
     return res.json({
-      url: uploadedUrls[0] || '',   // Atributo estándar que Uppy busca por defecto
-      urls: uploadedUrls.join(',')  // El string limpio separado por comas para tus listas de Bubble
+      url:  uploadedUrls[0] || '',   // primera URL (preview / single file)
+      urls: uploadedUrls             // ← CAMBIO 2: ARRAY, ya no .join(',')
     });
 
   } catch (err) {
     console.error('💥 [BACKEND CRITICAL ERROR] Fallo en el hilo de subida:', err.message);
     return res.status(500).json({
-      urls: '',
+      url: '',
+      urls: [],                      // ← CAMBIO 3: array vacío, no string
       error: `Error crítico en el servidor: ${err.message}`
     });
   }
