@@ -202,8 +202,8 @@ router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => 
     // 3. Retornar el JSON que Uppy (bundle: true) espera: una URL por archivo
     res.status(200);
     return res.json({
-      url:  uploadedUrls[0] || '',   // primera URL (preview / single file)
-      urls: uploadedUrls             // ← CAMBIO 2: ARRAY, ya no .join(',')
+      file:  uploadedUrls[0] || '',   // primera URL (preview / single file)
+      files: uploadedUrls             // ← CAMBIO 2: ARRAY, ya no .join(',')
     });
 
   } catch (err) {
