@@ -142,173 +142,75 @@ router.post('/storage/delete', async (req, res) => {
 // ============================================================================
 // POST /storage/upload — Versión Oficial Estricta Alineada con Uppy (bundle: true)
 // ============================================================================
-// ============================================================================
-// POST /storage/upload
-// Modo 1: Si recibe files[] -> sube archivos al backend y responde URLs finales
-// Modo 2: Si recibe filename sin files[] -> genera signed URL para Uppy
-// ============================================================================
 router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => {
   const t0 = Date.now();
-
   console.log('\n' + '='.repeat(70));
-  console.log('🚀 [BACKEND] /storage/upload');
+  console.log('🚀 [BACKEND] INICIANDO SUBIDA DIRECTA EN LOTE (ESTÁNDAR UPPY)');
   console.log('='.repeat(70));
 
   try {
-    // ------------------------------------------------------------------------
-    // MODO 2: GENERAR SIGNED URL
-    // Se usa cuando Bubble/Uppy pide una upload URL antes de subir el archivo.
-    // Body esperado:
-    // {
-    //   "filename": "foto.jpg",
-    //   "content_type": "image/jpeg"
-    // }
-    // ------------------------------------------------------------------------
+    // 1. Validar que los archivos llegaron bajo la llave "files[]" que exige Uppy
     if (!req.files || req.files.length === 0) {
-      const filename =
-        req.body.filename ||
-        req.body.file_name ||
-        req.body.name ||
-        '';
+      console.error('❌ [BACKEND ERROR] No se encontraron archivos en el campo mandatorio "files[]".');
+      return res.status(400).json({
+        url: '',
+        urls: [],                      // ← CAMBIO 1: array vacío, no string
+        error: 'El servidor no recibió archivos bajo la estructura esperada ("files[]").'
+      });
+    }
 
-      const contentType =
-        req.body.content_type ||
-        req.body.contentType ||
-        req.body.type ||
-        'application/octet-stream';
+    console.log(`📦 Lote oficial de Uppy detectado: ${req.files.length} archivo(s).`);
 
-      if (!filename) {
-        return res.status(400).json({
-          url: '',
-          uploadURL: '',
-          upload_url: '',
-          public_url: '',
-          file: '',
-          files: [],
-          urls: [],
-          error: 'No se recibieron archivos en "files[]" ni filename para generar signed URL.'
-        });
-      }
+    // 2. Procesar la carga paralela en el Bucket de GCS
+    const uploadPromises = req.files.map(async (file, index) => {
+      console.log(`[Archivo ${index + 1}] Procesando: "${file.originalname}" | Tamaño: ${(file.size / 1024).toFixed(1)} KB`);
 
-      const fileExt = filename.includes('.')
-        ? filename.split('.').pop()
-        : 'bin';
+      // Extraer la extensión original de manera segura
+      const fileExt = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'bin';
 
-      const cleanBaseName = filename
+      // Sanitizar el nombre del archivo para que la URL de Google Cloud no se rompa
+      const cleanBaseName = file.originalname
         .replace(`.${fileExt}`, '')
-        .replace(/[^a-zA-Z0-9]/g, '_')
+        .replace(/[^a-zA-Z0-9]/g, '_') // Intercambia espacios y símbolos por "_"
         .substring(0, 50);
 
       const uniqueFilename = `uploads/${Date.now()}_${cleanBaseName}.${fileExt}`;
       const gcsFile = gcsBucket.file(uniqueFilename);
-
-      const [signedUploadUrl] = await gcsFile.getSignedUrl({
-        version: 'v4',
-        action: 'write',
-        expires: Date.now() + 15 * 60 * 1000,
-        contentType
-      });
-
-      const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET_NAME}/${uniqueFilename}`;
-
-      console.log('🔐 Signed URL generada para:', filename);
-
-      return res.status(200).json({
-        // URL que Uppy debe usar para subir el archivo
-        url: signedUploadUrl,
-        uploadURL: signedUploadUrl,
-        upload_url: signedUploadUrl,
-
-        // URL final que debes guardar en Bubble
-        public_url: publicUrl,
-        file: publicUrl,
-        files: [publicUrl],
-        urls: [publicUrl],
-        urls_text: `"${publicUrl}"`,
-
-        method: 'PUT',
-        content_type: contentType,
-        filename: uniqueFilename,
-        expires_in_minutes: 15,
-        success: true
-      });
-    }
-
-    // ------------------------------------------------------------------------
-    // MODO 1: SUBIDA NORMAL AL BACKEND
-    // Uppy manda los archivos como files[] y el backend los sube a GCS.
-    // ------------------------------------------------------------------------
-    console.log(`📦 Archivos recibidos: ${req.files.length}`);
-
-    const uploadPromises = req.files.map(async (file, index) => {
-      console.log(
-        `[Archivo ${index + 1}] Procesando: "${file.originalname}" | Tamaño: ${(file.size / 1024).toFixed(1)} KB`
-      );
-
-      const fileExt = file.originalname.includes('.')
-        ? file.originalname.split('.').pop()
-        : 'bin';
-
-      const cleanBaseName = file.originalname
-        .replace(`.${fileExt}`, '')
-        .replace(/[^a-zA-Z0-9]/g, '_')
-        .substring(0, 50);
-
-      const uniqueFilename = `uploads/${Date.now()}_${index}_${cleanBaseName}.${fileExt}`;
-      const gcsFile = gcsBucket.file(uniqueFilename);
       const contentType = file.mimetype || 'application/octet-stream';
 
+      // Guardar el buffer en la nube
       await gcsFile.save(file.buffer, {
         metadata: {
-          contentType,
-          cacheControl: 'public, max-age=31536000'
+          contentType: contentType,
+          cacheControl: 'public, max-age=31536000', // 1 año de caché óptima para DotCasa
         },
         resumable: false,
         validation: false
       });
 
       const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET_NAME}/${uniqueFilename}`;
-
-      console.log(`✓ [Archivo ${index + 1}] Subido -> ${publicUrl}`);
-
+      console.log(`  ✓ [Archivo ${index + 1}] Almacenado en GCS -> ${publicUrl}`);
       return publicUrl;
     });
 
+    // Ejecutar todas las cargas en paralelo para máxima velocidad
     const uploadedUrls = await Promise.all(uploadPromises);
-    const firstUrl = uploadedUrls[0] || '';
-    const urlsText = uploadedUrls.map(url => `"${url}"`).join(',');
-
     const dur = ((Date.now() - t0) / 1000).toFixed(2);
-    console.log(`🏁 [BACKEND] Subida finalizada en ${dur}s`);
 
-    return res.status(200).json({
-      url: firstUrl,
-      uploadURL: firstUrl,
-      upload_url: firstUrl,
+    console.log(`🏁 [BACKEND] Subida masiva finalizada con éxito en ${dur}s`);
 
-      public_url: firstUrl,
-      file: firstUrl,
-      files: uploadedUrls,
-      urls: uploadedUrls,
-      urls_text: urlsText,
-
-      total: uploadedUrls.length,
-      success: true
+    // 3. Retornar el JSON que Uppy (bundle: true) espera: una URL por archivo
+    res.status(200);
+    return res.json({
+      url:  uploadedUrls[0] || '',   // primera URL (preview / single file)
+      urls: uploadedUrls             // ← CAMBIO 2: ARRAY, ya no .join(',')
     });
 
   } catch (err) {
-    console.error('💥 [BACKEND CRITICAL ERROR]:', err.message);
-
+    console.error('💥 [BACKEND CRITICAL ERROR] Fallo en el hilo de subida:', err.message);
     return res.status(500).json({
       url: '',
-      uploadURL: '',
-      upload_url: '',
-      public_url: '',
-      file: '',
-      files: [],
-      urls: [],
-      urls_text: '',
-      success: false,
+      urls: [],                      // ← CAMBIO 3: array vacío, no string
       error: `Error crítico en el servidor: ${err.message}`
     });
   }
