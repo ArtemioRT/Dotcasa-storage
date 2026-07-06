@@ -142,28 +142,102 @@ router.post('/storage/delete', async (req, res) => {
 // ============================================================================
 // POST /storage/upload — Versión Oficial Estricta Alineada con Uppy (bundle: true)
 // ============================================================================
-router.post('/storage/upload', upload.array('files[]'), async (req, res) => {
+// ============================================================================
+// POST /storage/upload
+// Modo 1: Si recibe files[] -> sube archivos al backend y responde URLs finales
+// Modo 2: Si recibe filename sin files[] -> genera signed URL para Uppy
+// ============================================================================
+router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => {
   const t0 = Date.now();
 
   console.log('\n' + '='.repeat(70));
-  console.log('🚀 [BACKEND] INICIANDO SUBIDA DIRECTA EN LOTE');
+  console.log('🚀 [BACKEND] /storage/upload');
   console.log('='.repeat(70));
 
   try {
+    // ------------------------------------------------------------------------
+    // MODO 2: GENERAR SIGNED URL
+    // Se usa cuando Bubble/Uppy pide una upload URL antes de subir el archivo.
+    // Body esperado:
+    // {
+    //   "filename": "foto.jpg",
+    //   "content_type": "image/jpeg"
+    // }
+    // ------------------------------------------------------------------------
     if (!req.files || req.files.length === 0) {
-      console.error('❌ [BACKEND ERROR] No se recibieron archivos en "files[]".');
+      const filename =
+        req.body.filename ||
+        req.body.file_name ||
+        req.body.name ||
+        '';
 
-      return res.status(400).json({
-        url: '',
-        uploadURL: '',
-        urls: [],
-        file: '',
-        files: [],
-        urls_text: '',
-        error: 'El servidor no recibió archivos bajo la estructura esperada ("files[]").'
+      const contentType =
+        req.body.content_type ||
+        req.body.contentType ||
+        req.body.type ||
+        'application/octet-stream';
+
+      if (!filename) {
+        return res.status(400).json({
+          url: '',
+          uploadURL: '',
+          upload_url: '',
+          public_url: '',
+          file: '',
+          files: [],
+          urls: [],
+          error: 'No se recibieron archivos en "files[]" ni filename para generar signed URL.'
+        });
+      }
+
+      const fileExt = filename.includes('.')
+        ? filename.split('.').pop()
+        : 'bin';
+
+      const cleanBaseName = filename
+        .replace(`.${fileExt}`, '')
+        .replace(/[^a-zA-Z0-9]/g, '_')
+        .substring(0, 50);
+
+      const uniqueFilename = `uploads/${Date.now()}_${cleanBaseName}.${fileExt}`;
+      const gcsFile = gcsBucket.file(uniqueFilename);
+
+      const [signedUploadUrl] = await gcsFile.getSignedUrl({
+        version: 'v4',
+        action: 'write',
+        expires: Date.now() + 15 * 60 * 1000,
+        contentType
+      });
+
+      const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET_NAME}/${uniqueFilename}`;
+
+      console.log('🔐 Signed URL generada para:', filename);
+
+      return res.status(200).json({
+        // URL que Uppy debe usar para subir el archivo
+        url: signedUploadUrl,
+        uploadURL: signedUploadUrl,
+        upload_url: signedUploadUrl,
+
+        // URL final que debes guardar en Bubble
+        public_url: publicUrl,
+        file: publicUrl,
+        files: [publicUrl],
+        urls: [publicUrl],
+        urls_text: `"${publicUrl}"`,
+
+        method: 'PUT',
+        content_type: contentType,
+        filename: uniqueFilename,
+        expires_in_minutes: 15,
+        success: true
       });
     }
 
+    // ------------------------------------------------------------------------
+    // MODO 1: SUBIDA NORMAL AL BACKEND
+    // Uppy manda los archivos como files[] y el backend los sube a GCS.
+    // ------------------------------------------------------------------------
     console.log(`📦 Archivos recibidos: ${req.files.length}`);
 
     const uploadPromises = req.files.map(async (file, index) => {
@@ -208,17 +282,15 @@ router.post('/storage/upload', upload.array('files[]'), async (req, res) => {
     console.log(`🏁 [BACKEND] Subida finalizada en ${dur}s`);
 
     return res.status(200).json({
-      // Para Uppy
       url: firstUrl,
       uploadURL: firstUrl,
+      upload_url: firstUrl,
 
-      // Para Bubble / listas
-      urls: uploadedUrls,
-      urls_text: urlsText,
-
-      // Compatibilidad con tu respuesta actual
+      public_url: firstUrl,
       file: firstUrl,
       files: uploadedUrls,
+      urls: uploadedUrls,
+      urls_text: urlsText,
 
       total: uploadedUrls.length,
       success: true
@@ -230,10 +302,12 @@ router.post('/storage/upload', upload.array('files[]'), async (req, res) => {
     return res.status(500).json({
       url: '',
       uploadURL: '',
-      urls: [],
-      urls_text: '',
+      upload_url: '',
+      public_url: '',
       file: '',
       files: [],
+      urls: [],
+      urls_text: '',
       success: false,
       error: `Error crítico en el servidor: ${err.message}`
     });
