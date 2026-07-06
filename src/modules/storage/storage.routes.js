@@ -144,73 +144,97 @@ router.post('/storage/delete', async (req, res) => {
 // ============================================================================
 router.post('/storage/upload', upload.array('files[]', 20), async (req, res) => {
   const t0 = Date.now();
+
   console.log('\n' + '='.repeat(70));
-  console.log('🚀 [BACKEND] INICIANDO SUBIDA DIRECTA EN LOTE (ESTÁNDAR UPPY)');
+  console.log('🚀 [BACKEND] INICIANDO SUBIDA DIRECTA EN LOTE');
   console.log('='.repeat(70));
 
   try {
-    // 1. Validar que los archivos llegaron bajo la llave "files[]" que exige Uppy
     if (!req.files || req.files.length === 0) {
-      console.error('❌ [BACKEND ERROR] No se encontraron archivos en el campo mandatorio "files[]".');
+      console.error('❌ [BACKEND ERROR] No se recibieron archivos en "files[]".');
+
       return res.status(400).json({
         url: '',
-        urls: [],                      // ← CAMBIO 1: array vacío, no string
+        uploadURL: '',
+        urls: [],
+        file: '',
+        files: [],
+        urls_text: '',
         error: 'El servidor no recibió archivos bajo la estructura esperada ("files[]").'
       });
     }
 
-    console.log(`📦 Lote oficial de Uppy detectado: ${req.files.length} archivo(s).`);
+    console.log(`📦 Archivos recibidos: ${req.files.length}`);
 
-    // 2. Procesar la carga paralela en el Bucket de GCS
     const uploadPromises = req.files.map(async (file, index) => {
-      console.log(`[Archivo ${index + 1}] Procesando: "${file.originalname}" | Tamaño: ${(file.size / 1024).toFixed(1)} KB`);
+      console.log(
+        `[Archivo ${index + 1}] Procesando: "${file.originalname}" | Tamaño: ${(file.size / 1024).toFixed(1)} KB`
+      );
 
-      // Extraer la extensión original de manera segura
-      const fileExt = file.originalname.includes('.') ? file.originalname.split('.').pop() : 'bin';
+      const fileExt = file.originalname.includes('.')
+        ? file.originalname.split('.').pop()
+        : 'bin';
 
-      // Sanitizar el nombre del archivo para que la URL de Google Cloud no se rompa
       const cleanBaseName = file.originalname
         .replace(`.${fileExt}`, '')
-        .replace(/[^a-zA-Z0-9]/g, '_') // Intercambia espacios y símbolos por "_"
+        .replace(/[^a-zA-Z0-9]/g, '_')
         .substring(0, 50);
 
-      const uniqueFilename = `uploads/${Date.now()}_${cleanBaseName}.${fileExt}`;
+      const uniqueFilename = `uploads/${Date.now()}_${index}_${cleanBaseName}.${fileExt}`;
       const gcsFile = gcsBucket.file(uniqueFilename);
       const contentType = file.mimetype || 'application/octet-stream';
 
-      // Guardar el buffer en la nube
       await gcsFile.save(file.buffer, {
         metadata: {
-          contentType: contentType,
-          cacheControl: 'public, max-age=31536000', // 1 año de caché óptima para DotCasa
+          contentType,
+          cacheControl: 'public, max-age=31536000'
         },
         resumable: false,
         validation: false
       });
 
       const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET_NAME}/${uniqueFilename}`;
-      console.log(`  ✓ [Archivo ${index + 1}] Almacenado en GCS -> ${publicUrl}`);
+
+      console.log(`✓ [Archivo ${index + 1}] Subido -> ${publicUrl}`);
+
       return publicUrl;
     });
 
-    // Ejecutar todas las cargas en paralelo para máxima velocidad
     const uploadedUrls = await Promise.all(uploadPromises);
+    const firstUrl = uploadedUrls[0] || '';
+    const urlsText = uploadedUrls.map(url => `"${url}"`).join(',');
+
     const dur = ((Date.now() - t0) / 1000).toFixed(2);
+    console.log(`🏁 [BACKEND] Subida finalizada en ${dur}s`);
 
-    console.log(`🏁 [BACKEND] Subida masiva finalizada con éxito en ${dur}s`);
+    return res.status(200).json({
+      // Para Uppy
+      url: firstUrl,
+      uploadURL: firstUrl,
 
-    // 3. Retornar el JSON que Uppy (bundle: true) espera: una URL por archivo
-    res.status(200);
-    return res.json({
-      file:  uploadedUrls[0] || '',   // primera URL (preview / single file)
-      files: uploadedUrls             // ← CAMBIO 2: ARRAY, ya no .join(',')
+      // Para Bubble / listas
+      urls: uploadedUrls,
+      urls_text: urlsText,
+
+      // Compatibilidad con tu respuesta actual
+      file: firstUrl,
+      files: uploadedUrls,
+
+      total: uploadedUrls.length,
+      success: true
     });
 
   } catch (err) {
-    console.error('💥 [BACKEND CRITICAL ERROR] Fallo en el hilo de subida:', err.message);
+    console.error('💥 [BACKEND CRITICAL ERROR]:', err.message);
+
     return res.status(500).json({
       url: '',
-      urls: [],                      // ← CAMBIO 3: array vacío, no string
+      uploadURL: '',
+      urls: [],
+      urls_text: '',
+      file: '',
+      files: [],
+      success: false,
       error: `Error crítico en el servidor: ${err.message}`
     });
   }
