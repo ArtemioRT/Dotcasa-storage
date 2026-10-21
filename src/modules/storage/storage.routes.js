@@ -12,7 +12,7 @@ import { parseUrlList, computeContentHash, makeDedupName } from '../../shared/ut
 import {
   downloadImage, gcsFileExists, streamPipelineToGCS, processAllLimited
 } from '../../shared/imageUtils.js';
-import { createImageJob, getImageJob, runImageJobInBackground } from './imageJobs.js';
+import { createImageJob, getImageJob, runImageJobInBackground, getOrderedUrls } from './imageJobs.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -26,7 +26,7 @@ router.post('/process-images/process', async (req, res) => {
   console.log('='.repeat(70));
 
   try {
-    const { image_urls, target_format, resize } = req.body;
+    const { image_urls, target_format, resize, wait } = req.body;
     if (!image_urls) return res.status(400).json({ error: 'image_urls requerido' });
     if (!OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY no configurada' });
 
@@ -37,6 +37,22 @@ router.post('/process-images/process', async (req, res) => {
 
     const jobId = createImageJob(urlList);
     console.log(`📋 Job creado: ${jobId} | ${urlList.length} URLs`);
+
+    // Modo síncrono (wait: true) — usado por backend workflows de Bubble
+    // (sync de EasyBroker): espera a que termine y responde con las URLs en orden.
+    if (wait === true || wait === 'true') {
+      await runImageJobInBackground(jobId, urlList, format, resize);
+      const job = getImageJob(jobId);
+      const ordered = getOrderedUrls(job);
+      return res.json({
+        job_id:   jobId,
+        status:   'done',
+        url:      ordered[0] || '',
+        all_urls: ordered.map(u => `"${u}"`).join(','),
+        total:    urlList.length,
+        done:     job ? job.done : urlList.length,
+      });
+    }
 
     // Dispara el procesamiento en background sin bloquear la respuesta HTTP
     runImageJobInBackground(jobId, urlList, format, resize).catch(err => {
@@ -70,7 +86,7 @@ router.post('/process-images/progress', (req, res) => {
   const job = getImageJob(job_id);
   if (!job) return res.status(404).json({ error: 'job_id no encontrado o ya expiró (máx 15 min)' });
 
-  const cleanUrls = job.urls;
+  const cleanUrls = getOrderedUrls(job);
 
   // Forzamos el formato de texto plano: "url1","url2","url3"
   const formattedUrlsText = cleanUrls.map(url => `"${url}"`).join(',');

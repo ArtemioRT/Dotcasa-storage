@@ -20,11 +20,19 @@ export function getImageJob(jobId) {
   return imageJobStore.get(jobId);
 }
 
+// URLs exitosas en el MISMO orden en que llegaron en image_urls
+// (job.urls queda en orden de terminación, que es aleatorio)
+export function getOrderedUrls(job) {
+  if (!job) return [];
+  return Array.isArray(job.results) ? job.results.filter(Boolean) : job.urls;
+}
+
 export function createImageJob(urlList) {
   const jobId = crypto.randomUUID();
   imageJobStore.set(jobId, {
     status: 'processing',   // 'processing' | 'done'
     urls: [],               // URLs procesadas exitosamente (se acumulan conforme terminan)
+    results: new Array(urlList.length).fill(null), // URL final por índice original (conserva el orden)
     total: urlList.length,
     done: 0,                // imágenes finalizadas (éxito + flagged + error)
     errors: 0,
@@ -53,6 +61,7 @@ export async function runImageJobInBackground(jobId, urlList, format, resize) {
       if (cached) {
         console.log(`[Job ${jobId}][Foto ${index + 1}] ✓ Caché GCS`);
         job.urls.push(cached);
+        job.results[index] = cached;
         job.done++;
         return;
       }
@@ -85,6 +94,7 @@ export async function runImageJobInBackground(jobId, urlList, format, resize) {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       console.log(`[Job ${jobId}][Foto ${index + 1}] ✓ OK ${duration}s (${Math.round(bytes / 1024)} KB)`);
       job.urls.push(uploadedUrl);
+      job.results[index] = uploadedUrl;
       job.done++;
 
     } catch (err) {
