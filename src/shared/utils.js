@@ -40,7 +40,7 @@ export function computeContentHash(buffer) {
 }
 
 export function makeDedupName(contentHash, opSignature, ext) {
-  return `dedup/${contentHash}_${opSignature}.${ext}`;
+  return `dedup_webp/${contentHash}_${opSignature}.${ext}`;
 }
 
 export function normalizePublicUrl(url) {
