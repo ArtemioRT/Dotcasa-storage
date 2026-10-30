@@ -1,5 +1,5 @@
 # ── dotcasa-storage ──────────────────────────────────────────────
-FROM node:20-slim AS deps
+FROM node:22.23.4-slim AS deps
 
 # sharp necesita libvips nativa; en slim instalamos solo lo necesario
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,7 +11,7 @@ COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 
 # ── imagen final ─────────────────────────────────────────────────
-FROM node:20-slim
+FROM node:22.23.4-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips42 \
